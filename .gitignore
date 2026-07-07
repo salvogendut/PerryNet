@@ -1,0 +1,10 @@
+.pio/
+.platformio/
+.venv/
+.pip-cache/
+.vscode/
+*.bin
+*.elf
+*.map
+__pycache__/
+*.pyc
