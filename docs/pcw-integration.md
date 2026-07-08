@@ -25,8 +25,13 @@ pn_tcp_close(channel)
 
 ## Serial Handling
 
-Use 8N1.  Start at 9600 baud until the PCW side has proven reliable.  The
-PerryFi board can use RTS/CTS:
+Use 8N1.  Start at 9600 baud until the PCW side has proven reliable.  Fresh
+`d1_mini` builds default to RTS/CTS disabled so the Wemos can be configured
+over USB serial immediately after flashing. Once installed in host hardware
+that wires the flow-control pins, RTS/CTS can be enabled with the UART setting
+command and saved to EEPROM.
+
+The PerryFi board can use RTS/CTS:
 
 - ESP8266 RTS tells the PCW whether the ESP8266 can receive more bytes.
 - ESP8266 CTS is driven by the PCW to pause ESP8266-to-PCW output.
@@ -37,8 +42,8 @@ PCW WiFi board timing quirk documented by the PerryFi firmware.
 
 ## Receive Model
 
-The ESP8266 can send events and socket data at any time.  PCW software should
-keep one central receive pump:
+For fast hosts, the ESP8266 can send events and socket data at any time.  Those
+hosts should keep one central receive pump:
 
 ```text
 while serial byte available:
@@ -54,9 +59,11 @@ while serial byte available:
             update socket/WiFi state
 ```
 
-For memory-constrained software, use small per-channel ring buffers and request
-application reads frequently.  The firmware chunks incoming network data into
-512-byte maximum frames, but the PCW side may choose smaller buffers.
+For memory-constrained or slow serial software, open TCP sockets with
+`TCP_OPEN` flag bit 1 and use `TCP_RECV`.  In that mode the firmware suppresses
+async `TCP_DATA` for that channel and only transmits network bytes as the ACK to
+the host's receive request.  This avoids ESP8266-to-PCW serial output while the
+PCW is repainting a window or polling the mouse.
 
 ## Why Not SLIP IP Packets?
 
@@ -74,8 +81,13 @@ A practical first host program should:
 3. Resolve a host name.
 4. Open a TCP socket to port 80.
 5. Send a simple HTTP/1.0 request.
-6. Print `TCP_DATA` frames until `TCP_CLOSED`.
+6. On PCW hardware, open TCP with pull RX enabled and poll `TCP_RECV` until
+   `TCP_CLOSED`.  Async `TCP_DATA` remains available for hosts with larger
+   serial buffers or working hardware flow control.
 
-That proves the serial link, DNS, TCP connect, TCP send, async receive, and
+For boot clocks, prefer `TIME_GET` over opening UDP/NTP from GEOBENCH. PerryNet
+starts SNTP after WiFi comes up; the PCW can read the valid UTC value later and
+apply its local timezone offset without blocking the desktop.
+
+That proves the serial link, DNS, TCP connect, TCP send, receive, and
 close-event paths without requiring a resident driver.
-

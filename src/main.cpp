@@ -6,6 +6,7 @@
 #include <EEPROM.h>
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
+#include <time.h>
 
 extern "C" {
 #include <uart_register.h>
@@ -13,6 +14,10 @@ extern "C" {
 
 #ifndef PERRYN_FW_NAME
 #define PERRYN_FW_NAME "PerryNet"
+#endif
+
+#ifndef PERRYN_DEFAULT_RTSCTS
+#define PERRYN_DEFAULT_RTSCTS 0
 #endif
 
 #ifndef D7
@@ -36,8 +41,11 @@ constexpr uint8_t SLIP_ESC_ESC = 0xDD;
 
 constexpr size_t MAX_PAYLOAD = 512;
 constexpr size_t MAX_FRAME_BODY = 6 + MAX_PAYLOAD + 2;
-constexpr size_t TCP_READ_CHUNK = 192;
+constexpr size_t TCP_READ_CHUNK = 32;
 constexpr size_t UDP_READ_CHUNK = 256;
+constexpr uint32_t TCP_DATA_GAP_MS = 120;
+constexpr uint32_t TIME_SYNC_RETRY_MS = 60000;
+constexpr uint32_t TIME_VALID_AFTER = 1609459200UL; // 2021-01-01 UTC
 constexpr uint8_t MAX_CHANNELS = 8;
 constexpr uint8_t MAX_LISTENERS = 2;
 
@@ -62,11 +70,13 @@ enum Opcode : uint8_t {
   OP_TCP_SEND = 0x32,
   OP_TCP_LISTEN = 0x33,
   OP_TCP_LISTEN_CLOSE = 0x34,
+  OP_TCP_RECV = 0x35,
   OP_UDP_OPEN = 0x40,
   OP_UDP_CLOSE = 0x41,
   OP_UDP_SEND = 0x42,
   OP_UART_GET = 0x50,
   OP_UART_SET = 0x51,
+  OP_TIME_GET = 0x60,
   OP_PING = 0x70,
   OP_ACK = 0x80,
   OP_EVENT = 0x81,
@@ -129,7 +139,9 @@ struct Channel {
   WiFiClient tcp;
   WiFiUDP udp;
   bool tcpWasConnected = false;
+  bool pullTcp = false;
   uint16_t localPort = 0;
+  uint32_t nextTcpDataAt = 0;
 };
 
 struct Listener {
@@ -153,6 +165,8 @@ uint32_t pendingBaud = 0;
 bool pendingRtsCts = true;
 bool pendingUartApply = false;
 uint32_t pendingUartApplyAt = 0;
+bool timeConfigured = false;
+uint32_t nextTimeConfigAt = 0;
 
 uint16_t crc16Update(uint16_t crc, uint8_t data) {
   crc ^= static_cast<uint16_t>(data) << 8;
@@ -211,6 +225,29 @@ void appendMac(uint8_t *buf, size_t &len) {
   }
 }
 
+bool timeValid() {
+  return static_cast<uint32_t>(time(nullptr)) >= TIME_VALID_AFTER;
+}
+
+void scheduleTimeSync() {
+  timeConfigured = false;
+  nextTimeConfigAt = 0;
+}
+
+void serviceTimeSync() {
+  if (WiFi.status() != WL_CONNECTED || timeValid()) {
+    return;
+  }
+  const uint32_t now = millis();
+  if (timeConfigured &&
+      static_cast<int32_t>(now - nextTimeConfigAt) < 0) {
+    return;
+  }
+  configTime(0, 0, "time.google.com", "pool.ntp.org", "time.cloudflare.com");
+  timeConfigured = true;
+  nextTimeConfigAt = now + TIME_SYNC_RETRY_MS;
+}
+
 size_t boundedStrLen(const char *value, size_t maxLen) {
   size_t len = 0;
   while (len < maxLen && value[len]) {
@@ -246,7 +283,7 @@ void defaults() {
   settings.magic = SETTINGS_MAGIC;
   settings.version = SETTINGS_VERSION;
   settings.baud = DEFAULT_BAUD;
-  settings.rtsCts = true;
+  settings.rtsCts = PERRYN_DEFAULT_RTSCTS != 0;
   settings.autoConnect = true;
   strncpy(settings.hostname, "perrynet", sizeof(settings.hostname) - 1);
   settings.hostname[sizeof(settings.hostname) - 1] = 0;
@@ -258,6 +295,10 @@ void loadSettings() {
   if (settings.magic != SETTINGS_MAGIC || settings.version != SETTINGS_VERSION ||
       settings.baud < 300 || settings.baud > 115200) {
     defaults();
+    EEPROM.put(0, settings);
+    EEPROM.commit();
+  } else if (!settings.autoConnect) {
+    settings.autoConnect = true;
     EEPROM.put(0, settings);
     EEPROM.commit();
   }
@@ -362,12 +403,15 @@ void sendWifiUpEvent() {
   size_t len = 0;
   appendNetworkStatus(payload, len, false);
   sendEvent(0, EVT_WIFI_UP, payload, len);
+  scheduleTimeSync();
 }
 
 void resetChannelState(uint8_t index) {
   channels[index].type = CH_UNUSED;
   channels[index].tcpWasConnected = false;
+  channels[index].pullTcp = false;
   channels[index].localPort = 0;
+  channels[index].nextTcpDataAt = 0;
 }
 
 int findFreeChannel() {
@@ -459,7 +503,7 @@ void handleHello(const FrameView &frame) {
   appendU16(payload, len, static_cast<uint16_t>(MAX_PAYLOAD));
   payload[len++] = MAX_CHANNELS;
   payload[len++] = MAX_LISTENERS;
-  appendU32(payload, len, 0x3FUL);
+  appendU32(payload, len, 0x7FUL);
   const char name[] = PERRYN_FW_NAME;
   memcpy(payload + len, name, sizeof(name));
   len += sizeof(name);
@@ -574,6 +618,8 @@ void handleTcpOpen(const FrameView &frame) {
   Channel &channel = channels[slot];
   channel.type = CH_TCP;
   channel.tcp.setNoDelay(flags & 0x01);
+  channel.pullTcp = (flags & 0x02) != 0;
+  channel.nextTcpDataAt = millis() + TCP_DATA_GAP_MS;
   if (!channel.tcp.connect(host, port)) {
     channel.tcp.stop();
     resetChannelState(slot);
@@ -616,6 +662,44 @@ void handleTcpSend(const FrameView &frame) {
   appendU16(payload, len, static_cast<uint16_t>(written));
   sendAck(frame.seq, frame.channel,
           written == frame.length ? ST_OK : ST_IO_ERROR, payload, len);
+}
+
+void handleTcpRecv(const FrameView &frame) {
+  Channel *channel = getChannel(frame.channel, CH_TCP);
+  if (!channel) {
+    sendAck(frame.seq, frame.channel, ST_BAD_CHANNEL);
+    return;
+  }
+  if (frame.length != 0 && frame.length != 2) {
+    sendAck(frame.seq, frame.channel, ST_BAD_LENGTH);
+    return;
+  }
+
+  uint16_t maxLen = TCP_READ_CHUNK;
+  if (frame.length == 2) {
+    maxLen = readU16(frame.payload);
+  }
+  if (maxLen > MAX_PAYLOAD - 1) {
+    maxLen = MAX_PAYLOAD - 1;
+  }
+
+  uint8_t payload[MAX_PAYLOAD - 1];
+  int got = 0;
+  if (maxLen && channel->tcp.available() > 0) {
+    const int available = channel->tcp.available();
+    const int limit = static_cast<int>(maxLen);
+    got = channel->tcp.read(payload, available < limit ? available : limit);
+    if (got < 0) {
+      sendAck(frame.seq, frame.channel, ST_IO_ERROR);
+      return;
+    }
+  }
+
+  sendAck(frame.seq, frame.channel, ST_OK, payload, static_cast<uint16_t>(got));
+  if (channel->tcpWasConnected && !channel->tcp.connected() &&
+      channel->tcp.available() == 0) {
+    closeChannel(frame.channel, true);
+  }
 }
 
 void handleTcpListen(const FrameView &frame) {
@@ -795,6 +879,16 @@ void handleUartSet(const FrameView &frame) {
   pendingUartApplyAt = millis() + 100;
 }
 
+void handleTimeGet(const FrameView &frame) {
+  uint8_t payload[1 + 4 + 4];
+  size_t len = 0;
+  const uint32_t now = timeValid() ? static_cast<uint32_t>(time(nullptr)) : 0;
+  payload[len++] = now ? 1 : 0;
+  appendU32(payload, len, now);
+  appendU32(payload, len, millis());
+  sendAck(frame.seq, frame.channel, ST_OK, payload, len);
+}
+
 void processFrame(const uint8_t *body, size_t len) {
   if (len < 8) {
     sendAck(0, 0, ST_BAD_FRAME);
@@ -859,6 +953,9 @@ void processFrame(const uint8_t *body, size_t len) {
     case OP_TCP_SEND:
       handleTcpSend(frame);
       break;
+    case OP_TCP_RECV:
+      handleTcpRecv(frame);
+      break;
     case OP_TCP_LISTEN:
       handleTcpListen(frame);
       break;
@@ -879,6 +976,9 @@ void processFrame(const uint8_t *body, size_t len) {
       break;
     case OP_UART_SET:
       handleUartSet(frame);
+      break;
+    case OP_TIME_GET:
+      handleTimeGet(frame);
       break;
     case OP_PING:
       sendAck(frame.seq, frame.channel, ST_OK, frame.payload, frame.length);
@@ -952,6 +1052,7 @@ void serviceListeners() {
     channel.tcp = accepted;
     channel.tcp.setNoDelay(true);
     channel.tcpWasConnected = true;
+    channel.nextTcpDataAt = millis() + TCP_DATA_GAP_MS;
 
     uint8_t payload[1 + 4 + 2];
     size_t len = 0;
@@ -964,22 +1065,25 @@ void serviceListeners() {
 
 void serviceTcpChannels() {
   uint8_t payload[TCP_READ_CHUNK];
+  const uint32_t now = millis();
   for (uint8_t i = 0; i < MAX_CHANNELS; ++i) {
     Channel &channel = channels[i];
     if (channel.type != CH_TCP) {
       continue;
     }
 
-    while (channel.tcp.available() > 0) {
+    if (!channel.pullTcp &&
+        channel.tcp.available() > 0 &&
+        static_cast<int32_t>(now - channel.nextTcpDataAt) >= 0) {
       const int available = channel.tcp.available();
       const int limit = static_cast<int>(sizeof(payload));
       const int toRead = available < limit ? available : limit;
       const int got = channel.tcp.read(payload, toRead);
-      if (got <= 0) {
-        break;
+      if (got > 0) {
+        sendFrame(OP_TCP_DATA, 0, i + 1, payload, got);
+        channel.nextTcpDataAt = millis() + TCP_DATA_GAP_MS;
+        yield();
       }
-      sendFrame(OP_TCP_DATA, 0, i + 1, payload, got);
-      yield();
     }
 
     if (channel.tcpWasConnected && !channel.tcp.connected() && channel.tcp.available() == 0) {
@@ -1045,6 +1149,9 @@ void applyPendingUartSettings() {
 void setup() {
   loadSettings();
 
+  settings.baud = DEFAULT_BAUD;
+  settings.rtsCts = false;
+
   pinMode(FLOW_RTS_PIN, OUTPUT);
   digitalWrite(FLOW_RTS_PIN, LOW);
   Serial.setRxBufferSize(512);
@@ -1057,7 +1164,7 @@ void setup() {
   WiFi.hostname(settings.hostname);
   WiFiClient::setDefaultNoDelay(true);
 
-  if (settings.autoConnect && settings.ssid[0]) {
+  if (settings.ssid[0]) {
     connectWifi();
   }
 
@@ -1073,6 +1180,7 @@ void loop() {
   }
 
   serviceWifiEvents();
+  serviceTimeSync();
   serviceListeners();
   serviceTcpChannels();
   serviceUdpChannels();

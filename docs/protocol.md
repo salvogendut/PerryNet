@@ -12,7 +12,8 @@ Serial defaults:
 - 8 data bits
 - no parity
 - 1 stop bit
-- RTS/CTS enabled on PerryFi hardware
+- RTS/CTS disabled in fresh `d1_mini` builds, so USB serial setup works on a
+  bare Wemos D1 mini
 
 Each frame is SLIP encoded:
 
@@ -85,11 +86,13 @@ Async device frames use sequence `0`.
 | `32` | TCP_SEND | host to device | TCP channel | bytes |
 | `33` | TCP_LISTEN | host to device | 0 | `port_le16` |
 | `34` | TCP_LISTEN_CLOSE | host to device | listener channel | empty |
+| `35` | TCP_RECV | host to device | TCP channel | optional `max_len_le16` |
 | `40` | UDP_OPEN | host to device | 0 | `local_port_le16` |
 | `41` | UDP_CLOSE | host to device | UDP channel | empty |
 | `42` | UDP_SEND | host to device | UDP channel | `ip4, port_le16, bytes` |
 | `50` | UART_GET | host to device | 0 | empty |
 | `51` | UART_SET | host to device | 0 | `baud_le32, flags` |
+| `60` | TIME_GET | host to device | 0 | empty |
 | `70` | PING | host to device | 0 | arbitrary bytes |
 | `80` | ACK | device to host | copied | `status, response...` |
 | `81` | EVENT | device to host | channel | `event, detail...` |
@@ -101,6 +104,7 @@ Async device frames use sequence `0`.
 | Bit | Meaning |
 | ---: | --- |
 | 0 | disable Nagle (`TCP_NODELAY`) |
+| 1 | host-pulled receive; suppress async `TCP_DATA`, use `TCP_RECV` |
 
 `UART_SET` flags:
 
@@ -110,7 +114,14 @@ Async device frames use sequence `0`.
 | 1 | save UART settings to EEPROM |
 
 The UART setting change is applied after the `ACK` frame has been transmitted.
-The PCW side must switch baud rate immediately after receiving that ACK.
+The host side must switch baud rate immediately after receiving that ACK.
+
+Host hardware that wires ESP8266 `D8`/GPIO15 and `D7`/GPIO13 for RTS/CTS can
+enable flow control with `UART_SET`; direct USB serial setup should leave it
+disabled.
+
+Current PCW/PerryFi builds force `9600 8N1` with RTS/CTS disabled at boot so
+older saved EEPROM UART settings cannot leave the Wemos silent on the PCW.
 
 ## Command Response Payloads
 
@@ -181,6 +192,18 @@ u8 listener_channel
 u16 port_le
 ```
 
+`TCP_RECV` response:
+
+```text
+u8 bytes[0..max_len]
+```
+
+If `max_len` is omitted, the firmware uses its default TCP read chunk. The
+response may be empty when no data is ready. Hosts with small serial FIFOs, such
+as the PCW/PerryFi path, should open TCP sockets with `TCP_OPEN` flag bit 1 and
+pull data explicitly with `TCP_RECV` so the firmware does not transmit while the
+host is repainting or polling other devices.
+
 `UDP_OPEN` response:
 
 ```text
@@ -195,6 +218,18 @@ u32 baud_le
 u8 flags
 ```
 
+`TIME_GET` response:
+
+```text
+u8  valid
+u32 unix_utc_le
+u32 uptime_ms_le
+```
+
+`valid` is `1` after the firmware has obtained NTP time. The firmware starts
+SNTP automatically when WiFi comes up and retries in the background; hosts
+should not block boot waiting for it.
+
 ## Events
 
 | Event | Name | Channel | Detail |
@@ -207,14 +242,22 @@ u8 flags
 | `12` | TCP_ERROR | TCP channel | status |
 | `20` | UDP_ERROR | UDP channel | status |
 
+`READY` is sent once at boot as a presence event. Hosts should treat it as
+asynchronous and ignore it while waiting for command ACKs.
+
 ## Suggested Host Flow
 
 1. Send `HELLO`.
 2. Configure WiFi once with `WIFI_SET`, then `SETTINGS_SAVE`.
-3. Send `WIFI_CONNECT` and wait for `ACK OK` or `WIFI_UP`.
-4. Open one or more sockets.
-5. Treat `TCP_DATA`, `UDP_DATA`, and `EVENT` frames as asynchronous input.
+3. On later boots, wait for `WIFI_UP` or poll `WIFI_STATUS`; saved credentials
+   automatically start a connection attempt at boot.
+4. Send `WIFI_CONNECT` only to retry or to force a connection attempt; `ACK OK`
+   means the attempt started, not that WiFi is already connected.
+5. Use `TIME_GET` when a host-side clock is needed; apply any local timezone
+   offset on the host.
+6. Use `DNS_RESOLVE`, then open one or more TCP/UDP sockets.
+7. For normal TCP sockets, treat `TCP_DATA`, `UDP_DATA`, and `EVENT` frames as
+   asynchronous input. For pull-mode TCP sockets, poll with `TCP_RECV` instead.
 
 The host should use sequence numbers for commands and ignore sequence `0` for
 command matching.
-
