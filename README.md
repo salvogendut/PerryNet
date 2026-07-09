@@ -144,6 +144,9 @@ with `tools/wifi_config.py`, then verify connectivity with
 
 ## Provenance
 
+The PerryNet name is a tribute to Roland Perry, the Amstrad engineer associated
+with the development of many of the company's computers.
+
 This project was written for the PerryFi hardware and uses the original
 PerryFi firmware as a hardware/protocol reference:
 
