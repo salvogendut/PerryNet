@@ -47,8 +47,9 @@ PerryNet keeps the original PerryFi hardware assumptions where they matter:
 - Wemos D1 mini / PerryFi-class ESP8266 hardware.
 - `D8` / GPIO15 as UART RTS output and `D7` / GPIO13 as UART CTS input.
 - Default `9600 8N1`.
-- The original PCW WiFi board's nominal `19200` baud setting maps internally to
-  `17857`, matching the board timing quirk documented by PerryFiFW.
+- PCW-oriented nominal baud settings map internally to exact CPS8256 divisors:
+  `19200` -> `17857`, matching PerryFiFW's timing quirk, and `38400` ->
+  `41667` for GEOBENCH Telnet's faster pull-mode profile.
 
 PerryNet also adds behavior specifically useful on PCW-class serial hardware:
 

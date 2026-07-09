@@ -257,9 +257,15 @@ size_t boundedStrLen(const char *value, size_t maxLen) {
 }
 
 uint32_t actualBaud(uint32_t requested) {
-  // The original PerryFi firmware maps the PCW's nominal 19200 setting to the
-  // measured counter-derived rate used by that serial board.
-  return requested == 19200UL ? 17857UL : requested;
+  // The PCW CPS8256 baud clock is PIT-derived, so some useful host-side
+  // profiles need aliases to the closest exact PCW divisor.
+  if (requested == 19200UL) {
+    return 17857UL; // divisor 7, matching the original PerryFi timing quirk
+  }
+  if (requested == 38400UL) {
+    return 41667UL; // divisor 3, used by GEOBENCH Telnet's fast pull mode
+  }
+  return requested;
 }
 
 void setHardwareFlow(bool enabled) {

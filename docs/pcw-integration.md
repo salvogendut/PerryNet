@@ -36,9 +36,10 @@ The PerryFi board can use RTS/CTS:
 - ESP8266 RTS tells the PCW whether the ESP8266 can receive more bytes.
 - ESP8266 CTS is driven by the PCW to pause ESP8266-to-PCW output.
 
-The firmware also supports a UART setting command.  On PerryFi hardware, a
-requested 19200 baud is internally mapped to 17857 baud to match the original
-PCW WiFi board timing quirk documented by the PerryFi firmware.
+The firmware also supports a UART setting command.  On PerryFi hardware, some
+requested baud rates are aliases for exact PCW PIT divisors: `19200` maps to
+`17857` for the original PerryFi timing quirk, and `38400` maps to `41667`
+for GEOBENCH Telnet's faster pull-mode profile.
 
 ## Receive Model
 
