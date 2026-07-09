@@ -51,8 +51,10 @@ usable from other retro hosts without implementing a full TCP/IP stack there.
 ```text
 .
 |-- docs/
-|   |-- pcw-integration.md   PCW/CP-M driver notes
-|   `-- protocol.md          PerryNet serial protocol reference
+|   |-- flashing-and-wifi.md  flashing and first WiFi setup
+|   |-- pcw-integration.md    PCW/CP-M driver notes
+|   |-- perryfi-comparison.md comparison with original PerryFiFW
+|   `-- protocol.md           PerryNet serial protocol reference
 |-- src/
 |   `-- main.cpp             ESP8266 firmware
 |-- tools/
@@ -94,28 +96,9 @@ The full wire format is documented in [docs/protocol.md](docs/protocol.md).
 
 ## Building And Flashing
 
-With PlatformIO:
-
-```sh
-pio run
-pio run -t upload
-```
-
 The firmware target is `d1_mini` and uses the Arduino framework for ESP8266.
-
-If PlatformIO is not installed globally, a local install works too:
-
-```sh
-python3 -m venv .venv
-.venv/bin/python -m pip install platformio
-env PLATFORMIO_CORE_DIR=.platformio .venv/bin/platformio run
-```
-
-The generated firmware binary is:
-
-```text
-.pio/build/d1_mini/firmware.bin
-```
+See [docs/flashing-and-wifi.md](docs/flashing-and-wifi.md) for full build,
+upload, first WiFi setup, and recovery instructions.
 
 ## First Host Test
 
@@ -140,43 +123,17 @@ commands.
 
 ## Configure WiFi From USB Serial
 
-After flashing a Wemos D1 mini, configure WiFi through the PerryNet protocol:
-
-```sh
-SSID='your wifi' PASS='your password' PORT=/dev/ttyUSB0 \
-  .venv/bin/python tools/wifi_config.py
-```
-
-This sends `WIFI_SET`, saves the credentials with `SETTINGS_SAVE`, then sends
-`WIFI_CONNECT` to verify them immediately and prints the assigned IP address.
-The firmware auto-connects on later boots once credentials are saved.
-
-To verify that the configured device can reach the internet:
-
-```sh
-PORT=/dev/ttyUSB0 .venv/bin/python tools/internet_test.py
-```
-
-The internet test checks WiFi status, resolves `example.com`, opens a TCP
-connection to port 80, sends an HTTP request, and reports the returned status
-line.
-
-If the tool times out waiting for a frame on a bare Wemos D1 mini, the board may
-already have older saved settings with UART RTS/CTS enabled. Normal firmware
-uploads can preserve the ESP8266 EEPROM-emulation sector. Temporarily connect
-`D7` / GPIO13 to `GND`, reset the board, then save flow control disabled:
-
-```sh
-PORT=/dev/ttyUSB0 .venv/bin/python tools/uart_config.py --no-rtscts --save
-```
-
-Remove the temporary `D7` to `GND` connection, reset again, then rerun
-`wifi_config.py`.
+After flashing a Wemos D1 mini, configure WiFi through the PerryNet protocol
+with `tools/wifi_config.py`, then verify connectivity with
+`tools/internet_test.py`. The full command sequence is in
+[docs/flashing-and-wifi.md](docs/flashing-and-wifi.md).
 
 ## Documentation
 
+- [Flashing and first WiFi setup](docs/flashing-and-wifi.md)
 - [Protocol reference](docs/protocol.md)
 - [Amstrad PCW integration notes](docs/pcw-integration.md)
+- [PerryNet vs original PerryFi firmware](docs/perryfi-comparison.md)
 
 ## Current Limitations
 
