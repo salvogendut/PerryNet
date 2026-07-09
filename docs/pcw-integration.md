@@ -38,8 +38,9 @@ The PerryFi board can use RTS/CTS:
 
 The firmware also supports a UART setting command.  On PerryFi hardware, some
 requested baud rates are aliases for exact PCW PIT divisors: `19200` maps to
-`17857` for the original PerryFi timing quirk, and `38400` maps to `41667`
-for GEOBENCH Telnet's faster pull-mode profile.
+`17857` for the original PerryFi timing quirk used by GEOBENCH Telnet's faster
+pull-mode profile, and `38400` maps to `41667` for experimental higher-speed
+PCW tests.
 
 ## Receive Model
 
