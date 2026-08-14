@@ -20,6 +20,10 @@ extern "C" {
 #define PERRYN_DEFAULT_RTSCTS 0
 #endif
 
+#ifndef PERRYN_HAS_RTSCTS
+#define PERRYN_HAS_RTSCTS 1
+#endif
+
 #ifndef D7
 #define D7 13
 #endif
@@ -64,6 +68,7 @@ enum Opcode : uint8_t {
   OP_WIFI_DISCONNECT = 0x13,
   OP_WIFI_STATUS = 0x14,
   OP_SETTINGS_SAVE = 0x15,
+  OP_WIFI_DIAG = 0x16,
   OP_DNS_RESOLVE = 0x20,
   OP_TCP_OPEN = 0x30,
   OP_TCP_CLOSE = 0x31,
@@ -167,6 +172,22 @@ bool pendingUartApply = false;
 uint32_t pendingUartApplyAt = 0;
 bool timeConfigured = false;
 uint32_t nextTimeConfigAt = 0;
+WiFiEventHandler wifiConnectedHandler;
+WiFiEventHandler wifiDisconnectedHandler;
+WiFiEventHandler wifiGotIpHandler;
+WiFiEventHandler wifiDhcpTimeoutHandler;
+uint16_t lastWifiDisconnectReason = 0;
+uint32_t wifiConnectAttempts = 0;
+uint32_t wifiConnectedEvents = 0;
+uint32_t wifiDisconnectedEvents = 0;
+uint32_t wifiGotIpEvents = 0;
+uint32_t wifiDhcpTimeoutEvents = 0;
+uint32_t lastWifiConnectAttemptAt = 0;
+uint32_t lastWifiConnectedAt = 0;
+uint32_t lastWifiDisconnectedAt = 0;
+uint32_t lastWifiGotIpAt = 0;
+uint8_t lastWifiChannel = 0;
+uint8_t lastWifiBssid[6] = {0};
 
 uint16_t crc16Update(uint16_t crc, uint8_t data) {
   crc ^= static_cast<uint16_t>(data) << 8;
@@ -225,6 +246,12 @@ void appendMac(uint8_t *buf, size_t &len) {
   }
 }
 
+void appendBytes(uint8_t *buf, size_t &len, const uint8_t *data, size_t dataLen) {
+  for (size_t i = 0; i < dataLen; ++i) {
+    buf[len++] = data[i];
+  }
+}
+
 bool timeValid() {
   return static_cast<uint32_t>(time(nullptr)) >= TIME_VALID_AFTER;
 }
@@ -269,6 +296,7 @@ uint32_t actualBaud(uint32_t requested) {
 }
 
 void setHardwareFlow(bool enabled) {
+#if PERRYN_HAS_RTSCTS
   if (enabled) {
     pinMode(FLOW_RTS_PIN, FUNCTION_4);
     SET_PERI_REG_BITS(UART_CONF1(0), UART_RX_FLOW_THRHD, 64, UART_RX_FLOW_THRHD_S);
@@ -282,6 +310,11 @@ void setHardwareFlow(bool enabled) {
     pinMode(FLOW_RTS_PIN, OUTPUT);
     digitalWrite(FLOW_RTS_PIN, LOW);
   }
+#else
+  (void)enabled;
+  CLEAR_PERI_REG_MASK(UART_CONF1(0), UART_RX_FLOW_EN);
+  CLEAR_PERI_REG_MASK(UART_CONF0(0), UART_TX_FLOW_EN);
+#endif
 }
 
 void defaults() {
@@ -550,9 +583,17 @@ void connectWifi() {
   if (!settings.ssid[0]) {
     return;
   }
+  ++wifiConnectAttempts;
+  lastWifiConnectAttemptAt = millis();
+  closeAllNetworkObjects();
   WiFi.mode(WIFI_STA);
+  WiFi.enableAP(false);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.hostname(settings.hostname);
+  WiFi.disconnect(false, false);
+  delay(100);
   WiFi.begin(settings.ssid, settings.password);
+  WiFi.reconnect();
 }
 
 void handleWifiConnect(const FrameView &frame) {
@@ -574,6 +615,37 @@ void handleWifiStatus(const FrameView &frame) {
   uint8_t payload[1 + 1 + 4 + 4 + 4 + 4 + 4 + 6];
   size_t len = 0;
   appendNetworkStatus(payload, len, true);
+  sendAck(frame.seq, frame.channel, ST_OK, payload, len);
+}
+
+void handleWifiDiag(const FrameView &frame) {
+  uint8_t payload[96];
+  size_t len = 0;
+  payload[len++] = static_cast<uint8_t>(WiFi.status());
+  payload[len++] = WiFi.isConnected() ? 1 : 0;
+  payload[len++] = static_cast<uint8_t>(WiFi.getMode());
+  payload[len++] = static_cast<uint8_t>(WiFi.getPhyMode());
+  payload[len++] = static_cast<uint8_t>(WiFi.getSleepMode());
+  payload[len++] = WiFi.channel();
+  appendU32(payload, len, static_cast<uint32_t>(WiFi.RSSI()));
+  appendIp(payload, len, WiFi.localIP());
+  appendIp(payload, len, WiFi.gatewayIP());
+  appendIp(payload, len, WiFi.subnetMask());
+  appendIp(payload, len, WiFi.dnsIP());
+  appendMac(payload, len);
+  const uint8_t *bssid = WiFi.BSSID();
+  appendBytes(payload, len, bssid ? bssid : lastWifiBssid, 6);
+  appendU16(payload, len, lastWifiDisconnectReason);
+  appendU32(payload, len, wifiConnectAttempts);
+  appendU32(payload, len, wifiConnectedEvents);
+  appendU32(payload, len, wifiDisconnectedEvents);
+  appendU32(payload, len, wifiGotIpEvents);
+  appendU32(payload, len, wifiDhcpTimeoutEvents);
+  appendU32(payload, len, millis() - lastWifiConnectAttemptAt);
+  appendU32(payload, len, lastWifiConnectedAt ? millis() - lastWifiConnectedAt : 0);
+  appendU32(payload, len, lastWifiDisconnectedAt ? millis() - lastWifiDisconnectedAt : 0);
+  appendU32(payload, len, lastWifiGotIpAt ? millis() - lastWifiGotIpAt : 0);
+  payload[len++] = lastWifiChannel;
   sendAck(frame.seq, frame.channel, ST_OK, payload, len);
 }
 
@@ -872,6 +944,12 @@ void handleUartSet(const FrameView &frame) {
   }
 
   settings.baud = baud;
+#if !PERRYN_HAS_RTSCTS
+  if (flags & 0x01) {
+    sendAck(frame.seq, frame.channel, ST_UNSUPPORTED);
+    return;
+  }
+#endif
   settings.rtsCts = flags & 0x01;
   if (flags & 0x02) {
     saveSettings();
@@ -946,6 +1024,9 @@ void processFrame(const uint8_t *body, size_t len) {
       break;
     case OP_SETTINGS_SAVE:
       sendAck(frame.seq, frame.channel, saveSettings() ? ST_OK : ST_IO_ERROR);
+      break;
+    case OP_WIFI_DIAG:
+      handleWifiDiag(frame);
       break;
     case OP_DNS_RESOLVE:
       handleDnsResolve(frame);
@@ -1158,17 +1239,41 @@ void setup() {
   settings.baud = DEFAULT_BAUD;
   settings.rtsCts = false;
 
+#if PERRYN_HAS_RTSCTS
   pinMode(FLOW_RTS_PIN, OUTPUT);
   digitalWrite(FLOW_RTS_PIN, LOW);
+#endif
   Serial.setRxBufferSize(512);
   Serial.begin(actualBaud(settings.baud), SERIAL_8N1);
   setHardwareFlow(settings.rtsCts);
 
   WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.enableAP(false);
+  WiFi.setSleepMode(WIFI_NONE_SLEEP);
   WiFi.setAutoReconnect(true);
   WiFi.hostname(settings.hostname);
   WiFiClient::setDefaultNoDelay(true);
+
+  wifiConnectedHandler = WiFi.onStationModeConnected([](const WiFiEventStationModeConnected &event) {
+    ++wifiConnectedEvents;
+    lastWifiConnectedAt = millis();
+    lastWifiChannel = event.channel;
+    memcpy(lastWifiBssid, event.bssid, sizeof(lastWifiBssid));
+  });
+  wifiDisconnectedHandler = WiFi.onStationModeDisconnected([](const WiFiEventStationModeDisconnected &event) {
+    ++wifiDisconnectedEvents;
+    lastWifiDisconnectedAt = millis();
+    lastWifiDisconnectReason = static_cast<uint16_t>(event.reason);
+    memcpy(lastWifiBssid, event.bssid, sizeof(lastWifiBssid));
+  });
+  wifiGotIpHandler = WiFi.onStationModeGotIP([](const WiFiEventStationModeGotIP &) {
+    ++wifiGotIpEvents;
+    lastWifiGotIpAt = millis();
+  });
+  wifiDhcpTimeoutHandler = WiFi.onStationModeDHCPTimeout([]() {
+    ++wifiDhcpTimeoutEvents;
+  });
 
   if (settings.ssid[0]) {
     connectWifi();

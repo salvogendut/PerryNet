@@ -15,6 +15,7 @@ from perrynet_serial import (
     OP_TCP_DATA,
     OP_WIFI_CONNECT,
     PerryNetClient,
+    PerryNetCommandError,
     PerryNetError,
     PerryNetTimeout,
 )
@@ -78,7 +79,12 @@ def main() -> int:
             if args.pull_rx:
                 last_data = time.monotonic()
                 while time.monotonic() < deadline:
-                    chunk = client.tcp_recv(channel, 64)
+                    try:
+                        chunk = client.tcp_recv(channel, 64)
+                    except PerryNetCommandError as exc:
+                        if exc.status == 0x04 and received:  # BAD_CHANNEL: peer closed.
+                            break
+                        raise
                     if chunk:
                         received.extend(chunk)
                         last_data = time.monotonic()
@@ -105,7 +111,11 @@ def main() -> int:
                         if event == EVT_TCP_ERROR:
                             raise PerryNetError("TCP error event")
 
-            client.tcp_close(channel)
+            try:
+                client.tcp_close(channel)
+            except PerryNetCommandError as exc:
+                if exc.status != 0x04:  # BAD_CHANNEL: peer close already cleaned it up.
+                    raise
             if not received:
                 raise PerryNetTimeout("no TCP data received")
 
@@ -114,9 +124,10 @@ def main() -> int:
             print(f"result: PASS ({len(received)} bytes, closed={int(closed)})")
     except PerryNetTimeout as exc:
         print(f"error: {exc}", file=sys.stderr)
-        print("hint: if this is a bare Wemos D1 over USB, PerryNet may have "
-              "RTS/CTS enabled. Temporarily tie D7/GPIO13 (CTS) to GND, then "
-              "run tools/uart_config.py --no-rtscts --save.", file=sys.stderr)
+        if "WiFi did not connect" not in str(exc):
+            print("hint: if this is a bare Wemos D1 over USB, PerryNet may have "
+                  "RTS/CTS enabled. Temporarily tie D7/GPIO13 (CTS) to GND, then "
+                  "run tools/uart_config.py --no-rtscts --save.", file=sys.stderr)
         return 1
     except (OSError, PerryNetError) as exc:
         print(f"error: {exc}", file=sys.stderr)
