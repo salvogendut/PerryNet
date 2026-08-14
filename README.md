@@ -40,6 +40,7 @@ This repository currently contains the first firmware cut:
 - Automatic SNTP clock initialization after WiFi connects; hosts can poll
   `TIME_GET` instead of doing their own boot-time NTP exchange.
 - Host-pulled TCP receive mode for 9600 baud PCW/DART hardware without RTS/CTS.
+- WiFi status and diagnostic commands for setup troubleshooting.
 - Protocol documentation and PCW integration notes.
 - Python reference helpers for host-side frame encoding/decoding.
 
@@ -62,6 +63,7 @@ usable from other retro hosts without implementing a full TCP/IP stack there.
 |   |-- perrynet.py          Python SLIP/CRC reference helper
 |   |-- perrynet_serial.py   small host-side PerryNet serial client
 |   |-- wifi_config.py       configure WiFi credentials over serial
+|   |-- wifi_get.py          inspect stored WiFi credential metadata
 |   |-- wifi_diag.py         detailed WiFi connection diagnostics
 |   |-- internet_test.py     DNS/TCP/HTTP connectivity test
 |   `-- uart_config.py       inspect/change UART settings

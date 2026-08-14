@@ -153,6 +153,12 @@ connection with `WIFI_CONNECT`, and prints the assigned IP address when the
 connection succeeds. The firmware auto-connects on later boots once credentials
 are saved.
 
+To inspect the stored SSID without revealing the stored password:
+
+```sh
+PORT=/dev/ttyUSB0 .venv/bin/python tools/wifi_get.py
+```
+
 ## Verify Internet Access
 
 Run the HTTP connectivity test:
@@ -169,6 +175,19 @@ PORT=/dev/ttyUSB0 .venv/bin/python tools/internet_test.py
 
 The test checks WiFi status, resolves `example.com`, opens a TCP connection to
 port 80, sends an HTTP request, pulls response data, and prints the result.
+
+## Diagnose WiFi
+
+If the device does not connect, read the WiFi diagnostic payload:
+
+```sh
+PORT=/dev/ttyUSB0 .venv/bin/python tools/wifi_diag.py
+```
+
+The diagnostic output includes station mode, PHY mode, sleep mode, current IP
+configuration, RSSI, BSSID, last disconnect reason, and connection event
+counters. This is useful for separating credential/AP problems from host serial
+protocol problems.
 
 ## Check Firmware Time
 
