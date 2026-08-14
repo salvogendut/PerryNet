@@ -12,8 +12,8 @@ Serial defaults:
 - 8 data bits
 - no parity
 - 1 stop bit
-- RTS/CTS disabled in fresh `d1_mini` builds, so USB serial setup works on a
-  bare Wemos D1 mini
+- RTS/CTS disabled in fresh `d1_mini` and `esp12f` builds, so USB serial setup
+  works on a bare board
 
 Each frame is SLIP encoded:
 
@@ -80,6 +80,7 @@ Async device frames use sequence `0`.
 | `13` | WIFI_DISCONNECT | host to device | 0 | empty |
 | `14` | WIFI_STATUS | host to device | 0 | empty |
 | `15` | SETTINGS_SAVE | host to device | 0 | empty |
+| `16` | WIFI_DIAG | host to device | 0 | empty |
 | `20` | DNS_RESOLVE | host to device | 0 | host name bytes |
 | `30` | TCP_OPEN | host to device | 0 | `host_len, host, port_le16, flags` |
 | `31` | TCP_CLOSE | host to device | TCP channel | empty |
@@ -147,6 +148,7 @@ Feature flags:
 | 3 | TCP listener |
 | 4 | UDP |
 | 5 | UART settings |
+| 6 | firmware UTC clock |
 
 `WIFI_GET` response:
 
@@ -170,6 +172,38 @@ u8 netmask[4]
 u8 dns[4]
 u8 mac[6]
 ```
+
+`WIFI_DIAG` response:
+
+```text
+u8  wifi_status
+u8  connected
+u8  wifi_mode
+u8  phy_mode
+u8  sleep_mode
+u8  channel
+i32 rssi_le
+u8  ip4[4]
+u8  gateway[4]
+u8  netmask[4]
+u8  dns[4]
+u8  sta_mac[6]
+u8  bssid[6]
+u16 last_disconnect_reason_le
+u32 connect_attempts_le
+u32 connected_events_le
+u32 disconnected_events_le
+u32 got_ip_events_le
+u32 dhcp_timeout_events_le
+u32 last_attempt_age_ms_le
+u32 connected_age_ms_le
+u32 disconnected_age_ms_le
+u32 got_ip_age_ms_le
+u8  last_channel
+```
+
+The diagnostic command is intended for setup and troubleshooting. Hosts should
+use `WIFI_STATUS` for normal lightweight polling.
 
 `DNS_RESOLVE` response:
 

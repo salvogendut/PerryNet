@@ -31,7 +31,8 @@ small operations:
 
 This repository currently contains the first firmware cut:
 
-- ESP8266 Arduino firmware for Wemos D1 mini class PerryFi hardware.
+- ESP8266 Arduino firmware for Wemos D1 mini class PerryFi hardware and
+  generic ESP-12F modules.
 - SLIP-framed binary protocol over UART.
 - WiFi credential storage in ESP8266 EEPROM emulation.
 - TCP client sockets, TCP listeners with accept events, UDP sockets, DNS
@@ -39,6 +40,7 @@ This repository currently contains the first firmware cut:
 - Automatic SNTP clock initialization after WiFi connects; hosts can poll
   `TIME_GET` instead of doing their own boot-time NTP exchange.
 - Host-pulled TCP receive mode for 9600 baud PCW/DART hardware without RTS/CTS.
+- WiFi status and diagnostic commands for setup troubleshooting.
 - Protocol documentation and PCW integration notes.
 - Python reference helpers for host-side frame encoding/decoding.
 
@@ -61,6 +63,8 @@ usable from other retro hosts without implementing a full TCP/IP stack there.
 |   |-- perrynet.py          Python SLIP/CRC reference helper
 |   |-- perrynet_serial.py   small host-side PerryNet serial client
 |   |-- wifi_config.py       configure WiFi credentials over serial
+|   |-- wifi_get.py          inspect stored WiFi credential metadata
+|   |-- wifi_diag.py         detailed WiFi connection diagnostics
 |   |-- internet_test.py     DNS/TCP/HTTP connectivity test
 |   `-- uart_config.py       inspect/change UART settings
 |-- platformio.ini           PlatformIO project configuration
@@ -69,17 +73,21 @@ usable from other retro hosts without implementing a full TCP/IP stack there.
 
 ## Hardware
 
-The firmware targets PerryFi-class Wemos D1 mini wiring:
+The firmware targets PerryFi-class Wemos D1 mini or ESP-12F wiring:
 
 - ESP8266 UART0 TX/RX for host serial.
 - `D8`/GPIO15 as UART RTS output.
 - `D7`/GPIO13 as UART CTS input.
 - Default serial mode: `9600 8N1`.
 
-Fresh `d1_mini` builds default to RTS/CTS disabled so a newly flashed Wemos can
-be configured over its USB serial bridge without a jumper. Flow control can be
-enabled later with `tools/uart_config.py --rtscts --save` for host hardware that
-wires the CTS/RTS pins.
+Fresh `d1_mini` and `esp12f` builds default to RTS/CTS disabled so a newly
+flashed board can be configured over its USB serial bridge without a jumper.
+Flow control can be enabled later with `tools/uart_config.py --rtscts --save`
+for host hardware that wires the CTS/RTS pins.
+
+There are also `esp01_1m` and `esp01` builds for ESP-01 modules. Those targets
+disable PerryFi RTS/CTS support at compile time because a normal ESP-01 exposes
+only UART TX/RX plus GPIO0/GPIO2.
 
 ## Protocol Summary
 
@@ -96,7 +104,9 @@ The full wire format is documented in [docs/protocol.md](docs/protocol.md).
 
 ## Building And Flashing
 
-The firmware target is `d1_mini` and uses the Arduino framework for ESP8266.
+The default firmware target is `d1_mini` and uses the Arduino framework for
+ESP8266. Use `esp12f` for a bare ESP-12F/4 MB module. ESP-01 modules should use
+`esp01_1m` for 1 MB modules or `esp01` for older 512 KB modules.
 See [docs/flashing-and-wifi.md](docs/flashing-and-wifi.md) for full build,
 upload, first WiFi setup, and recovery instructions.
 

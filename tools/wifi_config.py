@@ -68,9 +68,10 @@ def main() -> int:
                 print(f"wifi: current status={status.status_name} connected={int(status.connected)}")
     except PerryNetTimeout as exc:
         print(f"error: {exc}", file=sys.stderr)
-        print("hint: if this is a bare Wemos D1 over USB, PerryNet may have "
-              "RTS/CTS enabled. Temporarily tie D7/GPIO13 (CTS) to GND, then "
-              "run tools/uart_config.py --no-rtscts --save.", file=sys.stderr)
+        if "WiFi did not connect" not in str(exc):
+            print("hint: if this is a bare Wemos D1 over USB, PerryNet may have "
+                  "RTS/CTS enabled. Temporarily tie D7/GPIO13 (CTS) to GND, then "
+                  "run tools/uart_config.py --no-rtscts --save.", file=sys.stderr)
         return 1
     except (OSError, PerryNetError) as exc:
         print(f"error: {exc}", file=sys.stderr)

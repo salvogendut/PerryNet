@@ -16,6 +16,7 @@ OP_WIFI_SET = 0x11
 OP_WIFI_CONNECT = 0x12
 OP_WIFI_STATUS = 0x14
 OP_SETTINGS_SAVE = 0x15
+OP_WIFI_DIAG = 0x16
 OP_DNS_RESOLVE = 0x20
 OP_TCP_OPEN = 0x30
 OP_TCP_CLOSE = 0x31
@@ -120,6 +121,13 @@ def parse_wifi_status(payload: bytes) -> WifiStatus:
 class PerryNetClient:
     def __init__(self, port: str, baud: int = 9600, read_timeout: float = 0.05):
         self.serial = serial.Serial(port, baudrate=baud, timeout=read_timeout)
+        # Wemos/NodeMCU-style ESP8266 boards wire DTR/RTS to reset and GPIO0
+        # for auto-upload. Normal PerryNet protocol clients should release
+        # those lines so opening the port does not hold the board in reset or
+        # bootloader mode, then wait for the application to finish booting.
+        self.serial.dtr = False
+        self.serial.rts = False
+        time.sleep(1.0)
         self.seq = 0
         self._rx = bytearray()
         self._escaped = False
@@ -200,20 +208,25 @@ class PerryNetClient:
                 timeout: float = 5.0) -> bytes:
         seq = self.send(opcode, payload, channel)
         deadline = time.monotonic() + timeout
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise PerryNetTimeout(f"timed out waiting for ACK 0x{opcode:02X}")
-            frame = self.read_frame(remaining)
-            if frame.opcode != OP_ACK or frame.seq != seq:
-                self._pending.append(frame)
-                continue
-            if not frame.payload:
-                raise PerryNetError("empty ACK payload")
-            status = frame.payload[0]
-            if status:
-                raise PerryNetCommandError(status)
-            return frame.payload[1:]
+        skipped: list[Frame] = []
+        try:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise PerryNetTimeout(f"timed out waiting for ACK 0x{opcode:02X}")
+                frame = self.read_frame(remaining)
+                if frame.opcode != OP_ACK or frame.seq != seq:
+                    skipped.append(frame)
+                    continue
+                if not frame.payload:
+                    raise PerryNetError("empty ACK payload")
+                status = frame.payload[0]
+                if status:
+                    raise PerryNetCommandError(status)
+                return frame.payload[1:]
+        finally:
+            if skipped:
+                self._pending = skipped + self._pending
 
     def hello(self) -> tuple[int, int, int, int, int, int, str]:
         payload = self.command(OP_HELLO)
@@ -230,18 +243,39 @@ class PerryNetClient:
             name,
         )
 
-    def wifi_status(self) -> WifiStatus:
-        return parse_wifi_status(self.command(OP_WIFI_STATUS))
+    def wifi_status(self, timeout: float = 5.0) -> WifiStatus:
+        return parse_wifi_status(self.command(OP_WIFI_STATUS, timeout=timeout))
+
+    def wifi_get(self) -> tuple[str, bool]:
+        payload = self.command(OP_WIFI_GET)
+        if len(payload) < 2:
+            raise PerryNetError("short WIFI_GET response")
+        ssid_len = payload[0]
+        if len(payload) != 2 + ssid_len:
+            raise PerryNetError("bad WIFI_GET response length")
+        ssid = payload[2:].decode("utf-8", "replace")
+        return ssid, payload[1] != 0
 
     def wait_wifi(self, timeout: float = 30.0) -> WifiStatus:
         deadline = time.monotonic() + timeout
-        last = self.wifi_status()
-        while not last.connected and time.monotonic() < deadline:
+        last: WifiStatus | None = None
+        last_timeout: PerryNetTimeout | None = None
+        while time.monotonic() < deadline:
             time.sleep(1.0)
-            last = self.wifi_status()
-        if not last.connected:
+            try:
+                remaining = max(1.0, min(10.0, deadline - time.monotonic()))
+                last = self.wifi_status(timeout=remaining)
+                last_timeout = None
+            except PerryNetTimeout as exc:
+                last_timeout = exc
+                continue
+            if last.connected:
+                return last
+        if last is not None:
             raise PerryNetTimeout(f"WiFi did not connect, last status: {last.status_name}")
-        return last
+        if last_timeout is not None:
+            raise PerryNetTimeout(f"WiFi status did not respond: {last_timeout}")
+        raise PerryNetTimeout("WiFi did not connect")
 
     def set_wifi(self, ssid: str, password: str) -> None:
         ssid_b = ssid.encode("utf-8")
