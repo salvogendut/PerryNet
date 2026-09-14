@@ -8,6 +8,8 @@ and ESP-01 modules connected to the host over USB serial.
 - PlatformIO, either installed globally as `pio` or in a local Python virtual
   environment.
 - Python `pyserial` for the setup/test tools.
+- Python Tkinter for the optional GUI tool. On some Linux distributions this is
+  packaged separately as `python3-tkinter` or `python3-tk`.
 - A serial device such as `/dev/ttyUSB0` or `/dev/ttyACM0`.
 - WiFi SSID and password for a 2.4 GHz network supported by the ESP8266.
 
@@ -101,6 +103,35 @@ For ESP-12F builds it is:
 ```text
 .pio/build/esp12f/firmware.bin
 ```
+
+## GUI Setup Tool
+
+The Tkinter GUI wraps the same PlatformIO and PerryNet serial operations:
+
+```sh
+.venv/bin/python tools/perrynet_gui.py
+```
+
+The GUI can:
+
+- refresh and select serial ports
+- build and flash PerryNet targets
+- flash a supplied ESP8266 `.bin` file at `0x00000`
+- configure and save WiFi credentials
+- read stored WiFi metadata
+- show WiFi status and diagnostics
+- run the HTTP internet test
+
+If a Linux serial port exists but cannot be opened due to permissions, the GUI
+offers to run:
+
+```sh
+pkexec setfacl -m u:$USER:rw /dev/ttyUSB0
+```
+
+The selected serial device path is used in place of `/dev/ttyUSB0`. This grants
+temporary access to the current device node; reconnecting the USB serial adapter
+may require granting access again.
 
 ## ESP-01 Flash Wiring
 
