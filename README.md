@@ -60,6 +60,7 @@ usable from other retro hosts without implementing a full TCP/IP stack there.
 |-- src/
 |   `-- main.cpp             ESP8266 firmware
 |-- tools/
+|   |-- perrynet_gui.py      Tkinter GUI flasher and WiFi setup tool
 |   |-- perrynet.py          Python SLIP/CRC reference helper
 |   |-- perrynet_serial.py   small host-side PerryNet serial client
 |   |-- wifi_config.py       configure WiFi credentials over serial
@@ -109,6 +110,15 @@ ESP8266. Use `esp12f` for a bare ESP-12F/4 MB module. ESP-01 modules should use
 `esp01_1m` for 1 MB modules or `esp01` for older 512 KB modules.
 See [docs/flashing-and-wifi.md](docs/flashing-and-wifi.md) for full build,
 upload, first WiFi setup, and recovery instructions.
+
+For a graphical setup flow, run:
+
+```sh
+.venv/bin/python tools/perrynet_gui.py
+```
+
+The GUI can build/flash PerryNet targets, flash a supplied ESP8266 `.bin`
+image, configure WiFi, show diagnostics, and run the HTTP internet test.
 
 ## First Host Test
 
